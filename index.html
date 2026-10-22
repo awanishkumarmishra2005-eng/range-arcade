@@ -34,7 +34,7 @@
 <div id="menu">
   <div class="card" data-game="assault">
     <h2>Enemy Assault</h2>
-    <p>Hold the range. Waves of ground and flying enemies, three weapons. Best: <span id="bestA">0</span></p>
+    <p>Hold the range. Grunts, flyers, ghosts, skull bombers and a boss every 5 waves. Best: <span id="bestA">0</span></p>
   </div>
   <div class="card" data-game="darts">
     <h2>Dart Pro</h2>
@@ -212,7 +212,7 @@ function vignette() {
   g.fillRect(0, 0, W, H);
 }
 
-// ---------- Particles and rings ----------
+// ---------- Particles ----------
 function burst(x, y, color, n, kind = 0) {
   for (let i = 0; i < n; i++) {
     parts.push(kind === 0
@@ -245,6 +245,13 @@ function drawParts() {
   g.globalAlpha = 1;
 }
 
+function drawHpBar(x, y, w, frac) {
+  g.fillStyle = '#262b36';
+  g.fillRect(x, y, w, 4);
+  g.fillStyle = '#ff8a8a';
+  g.fillRect(x, y, w * Math.max(0, frac), 4);
+}
+
 function drawOverlay(title, sub) {
   g.fillStyle = 'rgba(0,0,0,.6)';
   g.fillRect(0, 0, W, H);
@@ -259,17 +266,20 @@ function drawOverlay(title, sub) {
 
 // ---------- Enemy Assault ----------
 const PX = 130, PY = 360;
+const HERO_X = PX + 3, HERO_Y = PY - 40;
 const WEAPONS = {
   pistol: { name: 'Pistol', cd: 320, speed: 14, n: 1, sp: 0,    ammo: Infinity },
   rapid:  { name: 'Rapid',  cd: 110, speed: 17, n: 1, sp: 0.05, ammo: 40 },
   spread: { name: 'Spread', cd: 620, speed: 12, n: 5, sp: 0.16, ammo: 20 },
 };
+const POINTS = { grunt: 10, fly: 10, tank: 25, ghost: 20, bomber: 15 };
 let A = null;
 
 function newAssault() {
   A = {
     hp: 100, score: 0, wave: 1, kills: 0, need: 5, spawnIn: 800, t: 0, scroll: 0,
-    enemies: [], bullets: [], rings: [], weapon: 'pistol',
+    enemies: [], bullets: [], eshots: [], rings: [], boss: null,
+    weapon: 'pistol',
     ammo: { pistol: Infinity, rapid: 40, spread: 20 },
     fireAt: 0, aim: { x: 600, y: 200 }, held: false, over: false,
     shake: 0, banner: 2000, flash: 0,
@@ -299,17 +309,42 @@ function tryFire(now) {
   burst(gx + 14, gy - 2, '#ffd166', 5, 0);
 }
 
-function spawnEnemy() {
-  const tank = A.wave >= 3 && Math.random() < 0.25;
-  const fly = Math.random() < 0.35;
-  const r = tank ? 24 : 16;
-  const y = fly ? rnd(150, 230) : PY - r;
-  A.enemies.push({
-    x: W + 30, y, baseY: y, r, fly, tank,
-    hp: tank ? 3 : 1, max: tank ? 3 : 1,
-    speed: (tank ? 0.45 : 0.8) + A.wave * 0.05 + (fly ? 0.25 : 0),
-    phase: rnd(0, 6), dead: false,
-  });
+// ---------- Enemy creation ----------
+function pickType() {
+  const w = A.wave, r = Math.random();
+  if (w >= 3 && r < 0.14) return 'bomber';
+  if (w >= 3 && r < 0.3) return 'tank';
+  if (w >= 2 && r < 0.45) return 'ghost';
+  if (r < 0.7) return 'fly';
+  return 'grunt';
+}
+
+function makeEnemy(type) {
+  const w = A.wave;
+  const base = { type, x: W + 30, phase: rnd(0, 6), dead: false, hp: 1, max: 1, r: 16, speed: 0.8 + w * 0.05 };
+  if (type === 'tank') {
+    return { ...base, r: 24, hp: 3, max: 3, y: PY - 24, speed: 0.45 + w * 0.05 };
+  }
+  if (type === 'fly') {
+    const y = rnd(150, 230);
+    return { ...base, y, baseY: y, speed: 1.05 + w * 0.05 };
+  }
+  if (type === 'ghost') {
+    const y = rnd(150, 240);
+    return { ...base, r: 20, hp: 2, max: 2, y, baseY: y, speed: 0.7 + w * 0.04 };
+  }
+  if (type === 'bomber') {
+    return { ...base, r: 15, y: 110, vy: 0.9 + w * 0.05, speed: 0.9 + w * 0.05 };
+  }
+  return { ...base, y: PY - 16 };
+}
+
+function spawnBoss() {
+  A.boss = {
+    x: W + 60, baseY: 170, y: 170, r: 44,
+    hp: 12 + A.wave, max: 12 + A.wave,
+    nextShot: A.t + 1500,
+  };
 }
 
 function nextWave() {
@@ -320,9 +355,62 @@ function nextWave() {
   A.ammo.spread += 6;
   A.hp = Math.min(100, A.hp + 5);
   A.banner = 2000;
-  setToast(`Wave ${A.wave}. Ammo restocked, health +5.`, 2000);
+  if (A.wave % 5 === 0) {
+    spawnBoss();
+    setToast('BOSS incoming. Defeat it to move on.', 2600);
+  } else {
+    setToast(`Wave ${A.wave}. Ammo restocked, health +5.`, 2000);
+  }
 }
 
+// ---------- Damage and kills ----------
+function hurt(dmg, msg) {
+  A.hp -= dmg;
+  A.shake = Math.max(A.shake, 8);
+  setToast(msg, 1200);
+  if (A.hp <= 0 && !A.over) {
+    A.hp = 0;
+    A.over = true;
+    saveBest('assault', A.score);
+  }
+}
+
+function reach(e, dmg) {
+  e.dead = true;
+  burst(PX + 50, e.y, '#ff8a8a', 14, 0);
+  burst(PX + 50, e.y, '#8a93a6', 6, 1);
+  hurt(dmg, 'An enemy reached the range!');
+}
+
+function explode(e) {
+  e.dead = true;
+  burst(e.x, e.y, '#ffb347', 26, 0);
+  burst(e.x, e.y, '#8a93a6', 12, 1);
+  A.rings.push({ x: e.x, y: e.y, r: 8, life: 34 });
+  hurt(15, 'A skull bomb exploded!');
+}
+
+function killEnemy(e) {
+  e.dead = true;
+  A.score += POINTS[e.type] || 10;
+  A.kills++;
+  A.shake = Math.max(A.shake, 6);
+  burst(e.x, e.y, '#ff8a8a', 22, 0);
+  burst(e.x, e.y, '#c9ced8', 10, 1);
+  A.rings.push({ x: e.x, y: e.y, r: 6, life: 30 });
+}
+
+function bossDown() {
+  A.score += 100;
+  burst(A.boss.x, A.boss.y, '#ffd166', 40, 0);
+  burst(A.boss.x, A.boss.y, '#8a93a6', 16, 1);
+  A.rings.push({ x: A.boss.x, y: A.boss.y, r: 10, life: 40 });
+  A.boss = null;
+  A.shake = 10;
+  setToast('Boss down! +100 points.', 2000);
+}
+
+// ---------- Update ----------
 function updateAssault(now, dt) {
   const s = dt / 16.67;
   A.t += dt;
@@ -336,22 +424,48 @@ function updateAssault(now, dt) {
 
   A.spawnIn -= dt;
   if (A.spawnIn <= 0) {
-    spawnEnemy();
+    A.enemies.push(makeEnemy(pickType()));
     A.spawnIn = Math.max(450, 1500 - A.wave * 120) + rnd(0, 300);
   }
 
   for (const e of A.enemies) {
+    if (e.dead) continue;
     e.x -= e.speed * s;
-    if (e.fly) e.y = e.baseY + Math.sin(A.t / 400 + e.phase) * 12;
-    if (e.x < PX + 60) {
-      e.dead = true;
-      A.hp -= e.tank ? 20 : 10;
-      A.shake = 10;
-      burst(PX + 50, e.y, '#ff8a8a', 14, 0);
-      burst(PX + 50, e.y, '#8a93a6', 6, 1);
-      setToast('An enemy reached the range!', 1200);
+    if (e.type === 'bomber') {
+      e.y += e.vy * s;
+      if (e.y >= PY - 16 || e.x < PX + 60) explode(e);
+    } else if (e.type === 'fly' || e.type === 'ghost') {
+      const amp = e.type === 'ghost' ? 30 : 12;
+      const per = e.type === 'ghost' ? 500 : 400;
+      e.y = e.baseY + Math.sin(A.t / per + e.phase) * amp;
+      if (e.x < PX + 60) reach(e, 10);
+    } else if (e.x < PX + 60) {
+      reach(e, e.type === 'tank' ? 20 : 10);
     }
   }
+
+  if (A.boss) {
+    const b = A.boss;
+    if (b.x > W - 150) b.x -= 0.8 * s;
+    b.y = b.baseY + Math.sin(A.t / 700) * 40;
+    if (A.t >= b.nextShot) {
+      const a = Math.atan2(HERO_Y - b.y, HERO_X - b.x);
+      A.eshots.push({ x: b.x - 10, y: b.y, vx: Math.cos(a) * 4.2, vy: Math.sin(a) * 4.2, dead: false });
+      b.nextShot = A.t + 1800;
+    }
+  }
+
+  for (const q of A.eshots) {
+    q.x += q.vx * s;
+    q.y += q.vy * s;
+    if (!q.dead && Math.hypot(q.x - HERO_X, q.y - HERO_Y) < 22) {
+      q.dead = true;
+      burst(q.x, q.y, '#ff8a8a', 10, 0);
+      hurt(10, 'Boss blast hit you.');
+    }
+    if (q.x < -30 || q.x > W + 30 || q.y < -30 || q.y > H + 30) q.dead = true;
+  }
+  A.eshots = A.eshots.filter(q => !q.dead);
 
   for (const b of A.bullets) {
     b.x += b.vx * s;
@@ -364,16 +478,15 @@ function updateAssault(now, dt) {
         e.hp--;
         A.rings.push({ x: b.x, y: b.y, r: 3, life: 22 });
         burst(b.x, b.y, '#ffd166', 6, 0);
-        if (e.hp <= 0) {
-          e.dead = true;
-          A.score += e.tank ? 25 : 10;
-          A.kills++;
-          A.shake = 6;
-          burst(e.x, e.y, '#ff8a8a', 22, 0);
-          burst(e.x, e.y, '#c9ced8', 10, 1);
-          A.rings.push({ x: e.x, y: e.y, r: 6, life: 30 });
-        }
+        if (e.hp <= 0) killEnemy(e);
       }
+    }
+    if (A.boss && !b.dead && Math.abs(b.x - A.boss.x) < A.boss.r && Math.abs(b.y - A.boss.y) < A.boss.r * 0.9) {
+      b.dead = true;
+      A.boss.hp--;
+      burst(b.x, b.y, '#ffd166', 8, 0);
+      A.rings.push({ x: b.x, y: b.y, r: 3, life: 22 });
+      if (A.boss.hp <= 0) bossDown();
     }
     if (b.x > W + 20 || b.y > H || b.y < -20 || b.life <= 0) b.dead = true;
   }
@@ -383,24 +496,19 @@ function updateAssault(now, dt) {
   for (const r of A.rings) { r.r += 1.6 * s; r.life -= s; }
   A.rings = A.rings.filter(r => r.life > 0);
 
-  if (A.kills >= A.need) nextWave();
-  if (A.hp <= 0) {
-    A.hp = 0;
-    A.over = true;
-    saveBest('assault', A.score);
-  }
+  if (A.kills >= A.need && !A.boss && !A.over) nextWave();
   updateParts(s);
 }
 
+// ---------- Drawing: hero ----------
 function drawPlayer(now) {
-  // legs
   g.fillStyle = '#2b3a55';
   g.fillRect(PX - 8, PY - 30, 8, 30);
   g.fillRect(PX + 4, PY - 30, 8, 30);
   g.fillStyle = '#14161c';
   g.fillRect(PX - 10, PY - 4, 12, 5);
   g.fillRect(PX + 3, PY - 4, 12, 5);
-  // vest and belt
+
   const vest = g.createLinearGradient(PX - 12, 0, PX + 18, 0);
   vest.addColorStop(0, '#2f6b4f');
   vest.addColorStop(1, '#4fa37c');
@@ -408,13 +516,37 @@ function drawPlayer(now) {
   g.fillRect(PX - 12, PY - 58, 30, 30);
   g.fillStyle = '#1d3f30';
   g.fillRect(PX - 12, PY - 36, 30, 4);
-  // head and helmet
+
+  // head, helmet, face
   g.fillStyle = '#f1d3b3';
-  g.beginPath(); g.arc(PX + 3, PY - 68, 9, 0, TAU); g.fill();
+  g.beginPath(); g.arc(HERO_X, PY - 68, 9, 0, TAU); g.fill();
   g.fillStyle = '#3d4a2a';
-  g.beginPath(); g.arc(PX + 3, PY - 70, 11, Math.PI, 0); g.fill();
+  g.beginPath(); g.arc(HERO_X, PY - 70, 11, Math.PI, 0); g.fill();
   g.fillRect(PX - 8, PY - 70, 22, 3);
 
+  // eyes that look toward the aim point
+  const dx = A.aim.x - HERO_X, dy = A.aim.y - (PY - 64);
+  const d = Math.hypot(dx, dy) || 1;
+  const lx = dx / d * 0.9, ly = dy / d * 0.6;
+  g.fillStyle = '#ffffff';
+  g.beginPath();
+  g.arc(PX + 0, PY - 64, 2.4, 0, TAU);
+  g.arc(PX + 6, PY - 64, 2.4, 0, TAU);
+  g.fill();
+  g.fillStyle = '#0b0e14';
+  g.beginPath();
+  g.arc(PX + lx, PY - 64 + ly, 1.2, 0, TAU);
+  g.arc(PX + 6 + lx, PY - 64 + ly, 1.2, 0, TAU);
+  g.fill();
+
+  // smile
+  g.strokeStyle = '#7a3b2e';
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.arc(HERO_X, PY - 62, 2.5, 0.15 * Math.PI, 0.85 * Math.PI);
+  g.stroke();
+
+  // gun
   const gx = PX + 34, gy = PY - 44;
   const a = Math.atan2(A.aim.y - gy, A.aim.x - gx);
   g.save();
@@ -438,26 +570,19 @@ function drawPlayer(now) {
   }
 }
 
-function drawEnemy(e, t) {
-  const bob = Math.sin(t / 110 + e.phase) * (e.fly ? 3 : 2);
-  const y = e.y + bob;
-  if (e.fly) {
-    const flap = Math.sin(t / 60 + e.phase) * 10;
-    g.fillStyle = 'rgba(201,184,255,.85)';
-    g.beginPath(); g.moveTo(e.x, y); g.lineTo(e.x - 26, y - flap - 6); g.lineTo(e.x - 12, y + 4); g.closePath(); g.fill();
-    g.beginPath(); g.moveTo(e.x, y); g.lineTo(e.x + 26, y - flap - 6); g.lineTo(e.x + 12, y + 4); g.closePath(); g.fill();
-  } else {
-    const stride = Math.sin(t / 90 + e.phase) * 5;
-    g.strokeStyle = '#2b2f3a';
-    g.lineWidth = 4;
-    g.beginPath();
-    g.moveTo(e.x - 5, y + e.r * 0.6); g.lineTo(e.x - 5 + stride, y + e.r + 8);
-    g.moveTo(e.x + 5, y + e.r * 0.6); g.lineTo(e.x + 5 - stride, y + e.r + 8);
-    g.stroke();
-  }
+// ---------- Drawing: enemies ----------
+function drawGroundEnemy(e, t) {
+  const y = e.y + Math.sin(t / 110 + e.phase) * 2;
+  const stride = Math.sin(t / 90 + e.phase) * 5;
+  g.strokeStyle = '#2b2f3a';
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(e.x - 5, y + e.r * 0.6); g.lineTo(e.x - 5 + stride, y + e.r + 8);
+  g.moveTo(e.x + 5, y + e.r * 0.6); g.lineTo(e.x + 5 - stride, y + e.r + 8);
+  g.stroke();
 
   const body = g.createRadialGradient(e.x - e.r * 0.35, y - e.r * 0.35, 2, e.x, y, e.r);
-  const pal = e.tank ? ['#f4a261', '#b5460f'] : e.fly ? ['#e8dcff', '#7f67cf'] : ['#c4f5f6', '#3a949d'];
+  const pal = e.tank ? ['#f4a261', '#b5460f'] : ['#c4f5f6', '#3a949d'];
   body.addColorStop(0, pal[0]);
   body.addColorStop(1, pal[1]);
   g.fillStyle = body;
@@ -467,24 +592,152 @@ function drawEnemy(e, t) {
     g.fillStyle = '#7a2d0a';
     g.fillRect(e.x - e.r * 0.8, y - 3, e.r * 1.6, 6);
   }
+  drawEyes(e.x, y, e.r);
+  if (e.max > 1) drawHpBar(e.x - e.r, y - e.r - 9, e.r * 2, e.hp / e.max);
+}
 
-  const dx = PX - e.x, dy = PY - 60 - y;
+function drawFlyEnemy(e, t) {
+  const y = e.y + Math.sin(t / 110 + e.phase) * 3;
+  const flap = Math.sin(t / 60 + e.phase) * 10;
+  g.fillStyle = 'rgba(201,184,255,.85)';
+  g.beginPath(); g.moveTo(e.x, y); g.lineTo(e.x - 26, y - flap - 6); g.lineTo(e.x - 12, y + 4); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(e.x, y); g.lineTo(e.x + 26, y - flap - 6); g.lineTo(e.x + 12, y + 4); g.closePath(); g.fill();
+
+  const body = g.createRadialGradient(e.x - e.r * 0.35, y - e.r * 0.35, 2, e.x, y, e.r);
+  body.addColorStop(0, '#e8dcff');
+  body.addColorStop(1, '#7f67cf');
+  g.fillStyle = body;
+  g.beginPath(); g.arc(e.x, y, e.r, 0, TAU); g.fill();
+  drawEyes(e.x, y, e.r);
+}
+
+// Cartoon ghost: big friendly eyes, wavy hem, soft glow.
+function drawGhost(e, t) {
+  const r = e.r;
+  const y = e.y + Math.sin(t / 150 + e.phase) * 2;
+  const hemY = y + r * 0.8;
+
+  g.save();
+  g.globalAlpha = 0.85 + 0.1 * Math.sin(t / 200 + e.phase);
+  g.shadowColor = 'rgba(180,220,255,.9)';
+  g.shadowBlur = 16;
+  const grd = g.createLinearGradient(0, y - r, 0, hemY + 8);
+  grd.addColorStop(0, '#f6fcff');
+  grd.addColorStop(1, '#a9c8e8');
+  g.fillStyle = grd;
+  g.beginPath();
+  g.arc(e.x, y - 2, r, Math.PI, 0);
+  g.lineTo(e.x + r, hemY);
+  for (let i = 0; i < 4; i++) {
+    const wob = Math.sin(t / 150 + i + e.phase) * 3;
+    const cx = e.x + r - (i + 0.5) * (2 * r / 4);
+    const ex = e.x + r - (i + 1) * (2 * r / 4);
+    g.quadraticCurveTo(cx, hemY + 8 + wob, ex, hemY);
+  }
+  g.closePath();
+  g.fill();
+  g.shadowBlur = 0;
+
+  const dx = HERO_X - e.x, dy = HERO_Y - y;
   const d = Math.hypot(dx, dy) || 1;
-  const ex = dx / d * e.r * 0.12, ey = dy / d * e.r * 0.12;
+  const px = dx / d * r * 0.09, py = dy / d * r * 0.09;
   for (const side of [-1, 1]) {
-    const cx = e.x + side * e.r * 0.35, cy = y - e.r * 0.1;
+    const cx = e.x + side * r * 0.32, cy = y - r * 0.12;
     g.fillStyle = '#ffffff';
-    g.beginPath(); g.arc(cx, cy, e.r * 0.2, 0, TAU); g.fill();
-    g.fillStyle = '#0b0e14';
-    g.beginPath(); g.arc(cx + ex, cy + ey, e.r * 0.1, 0, TAU); g.fill();
+    g.beginPath(); g.arc(cx, cy, r * 0.24, 0, TAU); g.fill();
+    g.fillStyle = '#0b1220';
+    g.beginPath(); g.arc(cx + px, cy + py, r * 0.12, 0, TAU); g.fill();
+  }
+  g.fillStyle = '#0b1220';
+  g.beginPath(); g.ellipse(e.x, y + r * 0.3, r * 0.12, r * 0.16, 0, 0, TAU); g.fill();
+  g.restore();
+
+  if (e.max > 1) drawHpBar(e.x - r, y - r - 10, r * 2, e.hp / e.max);
+}
+
+// Skull bomber: bone skull with a lit fuse. Shoot it before it lands.
+function drawBomber(e, t) {
+  const r = e.r;
+  const y = e.y;
+  const fuse = { x: e.x + r * 0.5, y: y - r * 0.8 };
+  const flick = 2 + Math.abs(Math.sin(t / 60 + e.phase)) * 2.5;
+
+  g.strokeStyle = '#8a6a4f';
+  g.lineWidth = 2;
+  g.beginPath(); g.moveTo(e.x + r * 0.2, y - r * 0.9); g.lineTo(fuse.x, fuse.y); g.stroke();
+  g.fillStyle = 'rgba(255,190,80,.9)';
+  g.beginPath(); g.arc(fuse.x, fuse.y, flick, 0, TAU); g.fill();
+  g.fillStyle = 'rgba(255,230,160,.9)';
+  g.beginPath(); g.arc(fuse.x, fuse.y, flick * 0.4, 0, TAU); g.fill();
+
+  g.fillStyle = '#f3efe0';
+  g.beginPath(); g.arc(e.x, y, r, 0, TAU); g.fill();
+  g.fillStyle = '#1b1b1f';
+  g.beginPath();
+  g.arc(e.x - r * 0.38, y - r * 0.1, r * 0.26, 0, TAU);
+  g.arc(e.x + r * 0.38, y - r * 0.1, r * 0.26, 0, TAU);
+  g.fill();
+  g.fillStyle = '#ff5a3c';
+  g.beginPath();
+  g.arc(e.x - r * 0.38, y - r * 0.1, r * 0.09, 0, TAU);
+  g.arc(e.x + r * 0.38, y - r * 0.1, r * 0.09, 0, TAU);
+  g.fill();
+  g.fillStyle = '#1b1b1f';
+  g.fillRect(e.x - r * 0.4, y + r * 0.45, r * 0.8, r * 0.3);
+  g.fillStyle = '#f3efe0';
+  for (let i = -1; i <= 1; i++) g.fillRect(e.x + i * r * 0.25 - 1, y + r * 0.45, 2, r * 0.3);
+}
+
+// Boss: armoured mech with a red visor and twin cannons.
+function drawBoss(b, t) {
+  const x = b.x, y = b.y, r = b.r;
+  g.save();
+  g.fillStyle = '#2b3142';
+  g.fillRect(x - r - 16, y - 8, 20, 16);
+  g.fillRect(x + r - 4, y - 8, 20, 16);
+
+  const body = g.createLinearGradient(x - r, y - r, x + r, y + r);
+  body.addColorStop(0, '#5b6478');
+  body.addColorStop(1, '#1d2230');
+  g.fillStyle = body;
+  g.beginPath();
+  g.roundRect(x - r, y - r * 0.9, r * 2, r * 1.8, 16);
+  g.fill();
+
+  g.fillStyle = 'rgba(120,130,150,.6)';
+  for (const [px, py] of [[-0.6, -0.6], [0.6, -0.6], [-0.6, 0.5], [0.6, 0.5]]) {
+    g.beginPath(); g.arc(x + px * r, y + py * r, 3, 0, TAU); g.fill();
   }
 
-  if (e.max > 1) {
-    g.fillStyle = '#262b36';
-    g.fillRect(e.x - e.r, y - e.r - 9, e.r * 2, 4);
-    g.fillStyle = '#ff8a8a';
-    g.fillRect(e.x - e.r, y - e.r - 9, e.r * 2 * e.hp / e.max, 4);
+  const glow = 0.6 + 0.4 * Math.sin(t / 180);
+  g.shadowColor = 'rgba(255,70,70,.9)';
+  g.shadowBlur = 14;
+  g.fillStyle = 'rgba(255,70,70,' + glow + ')';
+  g.fillRect(x - r * 0.7, y - r * 0.35, r * 1.4, r * 0.36);
+  g.shadowBlur = 0;
+  g.restore();
+
+  drawHpBar(x - r, y - r * 0.9 - 12, r * 2, b.hp / b.max);
+}
+
+function drawEyes(x, y, r) {
+  const dx = HERO_X - x, dy = HERO_Y - y;
+  const d = Math.hypot(dx, dy) || 1;
+  const ex = dx / d * r * 0.12, ey = dy / d * r * 0.12;
+  for (const side of [-1, 1]) {
+    const cx = x + side * r * 0.35, cy = y - r * 0.1;
+    g.fillStyle = '#ffffff';
+    g.beginPath(); g.arc(cx, cy, r * 0.2, 0, TAU); g.fill();
+    g.fillStyle = '#0b0e14';
+    g.beginPath(); g.arc(cx + ex, cy + ey, r * 0.1, 0, TAU); g.fill();
   }
+}
+
+function drawEnemy(e, t) {
+  if (e.type === 'ghost') drawGhost(e, t);
+  else if (e.type === 'bomber') drawBomber(e, t);
+  else if (e.type === 'fly') drawFlyEnemy(e, t);
+  else drawGroundEnemy(e, t);
 }
 
 function drawAssault(now) {
@@ -492,7 +745,15 @@ function drawAssault(now) {
   if (A.shake > 0) g.translate(rnd(-A.shake, A.shake), rnd(-A.shake, A.shake));
   drawRange(A.scroll, now);
   for (const e of A.enemies) drawEnemy(e, now);
+  if (A.boss) drawBoss(A.boss, now);
   drawPlayer(now);
+
+  for (const q of A.eshots) {
+    g.fillStyle = '#ff8a8a';
+    g.beginPath(); g.arc(q.x, q.y, 5, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(255,138,138,.35)';
+    g.beginPath(); g.arc(q.x, q.y, 9, 0, TAU); g.fill();
+  }
 
   for (const b of A.bullets) {
     g.strokeStyle = 'rgba(255,209,102,.5)';
@@ -514,7 +775,6 @@ function drawAssault(now) {
   vignette();
   g.restore();
 
-  // HUD bar and crosshair
   g.fillStyle = 'rgba(0,0,0,.45)';
   g.fillRect(16, 16, 214, 20);
   g.fillStyle = '#262b36';
@@ -820,8 +1080,9 @@ function updateHud() {
   const h = $('hud');
   if (mode === 'assault' && A) {
     const ammo = A.ammo[A.weapon] === Infinity ? '∞' : A.ammo[A.weapon];
+    const bossTxt = A.boss ? ` · Boss <b>${A.boss.hp}</b>` : '';
     h.innerHTML = `Score <b>${A.score}</b> · Wave <b>${A.wave}</b> · Health <b>${A.hp}</b> · ` +
-                  `Weapon <b>${WEAPONS[A.weapon].name}</b> · Ammo <b>${ammo}</b>`;
+                  `Weapon <b>${WEAPONS[A.weapon].name}</b> · Ammo <b>${ammo}</b>${bossTxt}`;
   } else if (mode === 'darts' && D) {
     const arrow = D.wind > 0 ? '→' : D.wind < 0 ? '←' : '–';
     h.innerHTML = `Score <b>${D.score}</b> · Darts left <b>${D.total - D.thrown}</b> · ` +
