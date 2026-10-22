@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Range Arcade</title>
 <style>
   * { box-sizing: border-box; }
@@ -25,6 +25,12 @@
   button.b.on { border-color: #7cf0c4; color: #7cf0c4; }
   .tip { color: #ffd166; font-size: .92rem; text-align: center; margin: 0; min-height: 1.3em; }
   .foot { color: #5d6678; font-size: .75rem; margin-top: 18px; }
+
+  /* Full-screen mode for phones */
+  #game:fullscreen { background: #0b0e14; width: 100vw; height: 100vh; justify-content: center; padding: 6px; gap: 4px; }
+  #game:fullscreen canvas { width: auto; max-width: 100vw; height: calc(100vh - 150px); border-radius: 0; border: none; }
+  #game:fullscreen #nav, #game:fullscreen .tip { display: none; }
+  #game:fullscreen #hud { font-size: .8rem; }
 </style>
 </head>
 <body>
@@ -47,7 +53,10 @@
   <canvas id="c" width="900" height="500"></canvas>
   <div class="btns" id="btns"></div>
   <p class="tip" id="tip"></p>
-  <button class="b" id="back">← Menu</button>
+  <div class="btns" id="nav">
+    <button class="b" id="fs" type="button">⛶ Full screen</button>
+    <button class="b" id="back" type="button">← Menu</button>
+  </div>
 </section>
 <p class="foot">No sign-up, no tracking. Best scores are saved on this device only.</p>
 
@@ -1110,6 +1119,25 @@ $('back').onclick = () => {
   $('game').style.display = 'none';
   $('menu').style.display = 'grid';
 };
+
+// ---------- Full screen (phones) ----------
+$('fs').onclick = async () => {
+  try {
+    if (!document.fullscreenElement) {
+      await $('game').requestFullscreen();
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+      }
+    } else {
+      await document.exitFullscreen();
+    }
+  } catch (e) {
+    setToast('Full screen is not supported here. Turn your phone sideways instead.', 2500);
+  }
+};
+document.addEventListener('fullscreenchange', () => {
+  $('fs').textContent = document.fullscreenElement ? '✕ Exit full screen' : '⛶ Full screen';
+});
 </script>
 </body>
 </html>
